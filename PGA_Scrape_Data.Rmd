@@ -32,10 +32,10 @@ knitr::opts_chunk$set(fig.align="center",
 
 This markdown file scrapes the PGA Tour website for the desired statistics that will be used for analysis and creates a single data frame that includes all 18 stats for 463 players.
 
-## Variables
-Each of the below variables is created for the years 2005:2018.
+## Variable Definitions
+
+Create function to get definitions for each variable from PGA website
 ```{r}
-## Create function to get definitions for each variable from PGA website
 get_variable_defintions <- function(stat){
   pga_data_urls <- paste("https://www.pgatour.com/stats/stat.",
                        stat, ".2018.html",
@@ -124,11 +124,12 @@ print("Players who have played in at least one Masters tournament")
 print("World Golf Ranking in Week 13 - the week before Masters tournament")
 ```
 
+
 ## PGA Tour Web Scraper
 The following creates a scraper to scrape the needed data from www.pgatour.com/stats. First the scaper is created, then the data for each year and stat is cleaned up and assigned to a corresponding variable. Finally, all stats for each player and year are merged into one data frame for each year. To use the function to get different stats for different years: get_all_data(stat, year) - where stat is corresponding stat number from website (ie. "127") and year is year of data desired (ie. 2018).
 
+Create function to retrieve statistics from PGA website
 ```{r}
-## Create function to retrieve statistics from PGA website
 get_all_data <- function(stat, year = 2018){
   pga_data_urls <- paste("https://www.pgatour.com/stats/stat.",
                        stat, ".",
@@ -278,11 +279,12 @@ players <- as.data.frame(players)
 names(players)[names(players)=="players"] <- "player_name"
 ```
 
+
 ## Web scraper to get Masters Data for past years
 The following code scrapes Masters tournament data from https://www.golfstats.com/. Here we are particularly interested in finish position and Round 1-4 scores.
 
+Create function to retrieve statistics from Golf Stats website
 ```{r}
-## Create function to retrieve statistics from Golf Stats website
 get_masters_data <- function(year = 2018){
   masters_data_urls <- paste("https://www.golfstats.com/search/?yr=",
                        year,
@@ -336,7 +338,10 @@ all_data <- left_join(ranking_all, top10_all, by =c("player_name", "year")) %>%
 all_data <- all_data[!(all_data$player_name=="Richard Johnson"),]
 
 all_data <- all_data %>% arrange(player_name, year)
-## Change NAs in wins and top 10 to 0 for binary
+```
+
+Change NAs in wins and top 10 to 0 for binary
+```{r}
 all_data$wins[is.na(all_data$wins)] <- 0
 all_data$top_10[is.na(all_data$top_10)] <- 0
 ```
@@ -356,6 +361,7 @@ wgr_data <- read.csv("wgr_golf_rank.csv")
 wgr_data <- wgr_data[,-1]
 ```
 
+Final file with all variables needed for analysis
 ```{r}
 pga_data <- left_join(all_data, wgr_data, by = c("player_name", "year"))
 write.csv(pga_data, "pga_data_all.csv")
