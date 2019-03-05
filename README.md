@@ -6,7 +6,9 @@ The following files are needed in this repository:
 1. WorldGolfRank_Pull.R : Scraper for pulling World Golf Rankings for Week 13; the week prior to the Masters Tournament
 2. PGA_Scrape_Data.Rmd : Scraper for pulling all the needed variables for analysis
 3. Data_expooration.Rmd : Exploratory analysis of the PGA data
-4. 
+4. PGA Modling : Modeling work to predict Masters tournament
+5. wgr_golf_rank.csv : WGR Rankings Excel
+6. pga_data_final.csv : Excel with all data
 
 Goals
 The following are the goals of the project:
