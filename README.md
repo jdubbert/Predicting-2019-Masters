@@ -1,5 +1,5 @@
 # Predicting-2019-Masters
-This project will seek to predict the 2019 Masters tournament results by using OLS, lasso regression, GAM, Random Forest, bagging and boosting models.
+The goal of this project is to predict the 2019 Masters tournament results by using multiple machine learning algorithms, using cross-validation and model optimization to train and test each model. 
 
 The following files are needed in this repository:
 
