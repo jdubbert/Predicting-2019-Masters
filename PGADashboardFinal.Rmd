@@ -1,0 +1,541 @@
+---
+title: "2019 Master's Prediction"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    social: menu
+    source_code: embed
+    theme: spacelab
+    navbar:
+      - { title: "Github Repo", href: "https://github.com/jdubbert/Predicting-2019-Masters", align: right }
+
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(broom)
+library(tidyverse)
+library(broom)
+library(glmnet)
+library(caret)
+library(ISLR)
+library(janitor)
+library(stringr)
+library(rpart)
+library(rpart.plot)
+library(partykit)
+library(tree)
+library(nnet)
+library(dplyr)
+library(car)
+library(plotROC)
+library(kernlab)
+library(MASS)
+library(randomForest)
+library(kernlab) 
+library(naivebayes)
+library(pROC)
+library(ROCR)
+library(verification)
+library(gbm)
+library(knitr)
+library(DT)
+library(stargazer)
+```
+
+```{r data, include=FALSE}
+# Data
+df2 <- read.csv("df2.csv", stringsAsFactors = FALSE)
+df2$wgr <- as.numeric(df2$wgr)
+df2$rounds <- as.numeric(df2$rounds)
+df2$wins <- as.numeric(df2$wins)
+df2$top_10 <- as.numeric(df2$top_10)
+df2$ranking <- as.numeric(df2$ranking)
+df2$masters_finish <- as.numeric(df2$masters_finish)
+df2$m_cut <- as.factor(df2$m_cut)
+df2$top_25 <- as.factor(df2$top_25)
+df2$m_play <- as.factor(df2$m_play)
+df2$new_score<- as.numeric(df2$new_score)
+
+## Training and Testing Datasets
+set.seed(1234)
+inTraining <- createDataPartition(df2$score_average, p = .75, list = F)
+training <- df2[inTraining,]
+testing <- df2[-inTraining,]
+```
+
+Overview
+=======================================================================
+
+**2019 MASTER'S TOURNAMENT PREDICTIONS**
+
+The Github repository for all code and files can be found here: https://github.com/jdubbert/Predicting-2019-Masters
+
+**OBJECTIVE**
+
+The purpose of this project was to identify the best model to predict the 2019 Masters Tournament. I used data from 2005 to 2017, which had a total of 742 observations, for the training and testing datasets. With each model, parameter optimization was performed and cross-validation was used to evaluate model performance. I then used data from 2018 to predict the Masters results for 2019.
+
+In this analysis I went through multiple classification models to predict whether a player would place in the `top_25` of the Master's Tournament and multiple regression models to predict the `total_score` and finish position for each player. For each model, the optimal set of parameters are selected through brute force: all possible combinations of parameters are looped through, and for each set of parameters the model's performance is evaluated using cross validation. This is done to avoid overfitting: that is, choosing a model that fits the estimating data very well but does not generalize well to new data. 
+
+I divided the PGA data into a "training" set and a "testing" set. The training set is used to estimate the parameters of the model, and then the testing set is used to evaluate the predictions of the model. The classification models are evaluated using accuracy and area under the curve (AUC), and the regression models are evaluated using mean-squared prediction error, which in this context is defined as the difference between our predicted `total_score` and the observed `total_score`, squared and then averaged. 
+
+**DATA**
+
+The data is from https://www.pgatour.com/stats.html and consists of yearly PGA Tour player summary statistics from 2005-2018.  
+
+Dependent Variables:
+
+- Top 25
+- Total Score (Masters)
+
+Independent Variables:
+
+- Played in Masters last year
+- Top 10 Finishes
+- Strokes Gained Total
+- Strokes Gained Putting
+- Strokes Gained Tee to Green
+- Scoring Average
+- Rounds played
+- Driving Distance
+- Driving Accuracy
+- Greens in Regulation (GIR) %
+- Ranking (ranking week leading up to masters)
+- Wins
+- Putts per Round
+- Scrambling
+- Par 5 scoring average
+- Times played in Masters
+- Bounce Back Percentage
+- Proximity to Hole
+- World Golf Ranking (WGR)
+
+**MODELS**
+
+For predicting the `top_25`, the classification models used were:
+
+1. Logistic regression
+2. Linear discriminant analysis
+3. Quadratic discriminant analysis
+4. Boosted algorithm
+5. Random Forest
+5. Bagged algorithm
+6. Support vector machine
+7. Neural Net
+8. Lasso Regression
+9. Polynomial regression
+
+For predicting the `total_score`, the regression models used were:
+
+1. Linear Regression
+2. Ridge Regression
+3. Random Forest
+4. Gradient Boosting Model (GBM)
+5. Neural Net
+6. Bagged model
+7. Lasso Regression
+
+**RESULTS**
+
+For the classification problem predicting players that will finish in the `top_25` of the Masters, the best model in terms of test Accuracy was the QDA model with an Accuracy rate of 72.3%. In terms of test AUC, the LDA model performed the best with an AUC of 0.72. I decided to use the QDA model for predicting the 2019 Masters because it had the highest accuracy and its AUC was 0.71, not too far off from that of the LDA. The QDA's significant predictors were World Golf Ranking, points gained and strokes gained tee to green. 
+
+For the regression problem predicting the final total score, the best model in terms of MSE was the ridge regression with an MSE of 112.
+
+Data
+=======================================================================
+
+Row {.tabset}
+-----------------------------------------------------------------------
+
+### Raw Data: 2005-2017
+```{r data explore}
+data_all <- read.csv("all_data.csv")
+data_all <- data_all[,-1]
+
+DT::datatable(data_all, rownames=FALSE,options = list(
+  pageLength=100
+))
+```
+
+### Summary Stats
+```{r summary}
+stargazer(data_all, type = "text", summary.stat =c("n", "sd", "mean", "median", "min", "max"), summary.logical = FALSE)
+```
+
+Data Exploration
+=======================================================================
+
+Row {.tabset}
+-----------------------------------------------------------------------
+
+### Correlations
+```{r correl}
+data_all %>%
+  select_if(is.numeric) %>%
+  cor() %>%
+  heatmap()
+```
+
+### Plot Against Top 25
+```{r plots}
+data_all$top_25 <- as.factor(data_all$top_25)
+p1<-ggplot(data = data_all,aes(x = top_25,y = wgr,fill=top_25))+geom_boxplot()
+p2<-ggplot(data = data_all,aes(x = top_25,y = ranking,fill=top_25))+geom_boxplot()
+p3<-ggplot(data = data_all,aes(x = top_25,y = top_10,fill=top_25))+geom_boxplot()
+p4<-ggplot(data = data_all,aes(x = top_25,y = wins,fill=top_25))+geom_boxplot()
+p5<-ggplot(data = data_all,aes(x = top_25,y = score_average,fill=top_25))+geom_boxplot()
+p6<-ggplot(data = data_all,aes(x = top_25,y = rounds,fill=top_25))+geom_boxplot()
+p7<-ggplot(data = data_all,aes(x = top_25,y = bounce_back,fill=top_25))+geom_boxplot()
+p8<-ggplot(data = data_all,aes(x = top_25,y = driving_accuracy,fill=top_25))+geom_boxplot()
+p9<-ggplot(data = data_all,aes(x = top_25,y = driving_distance,fill=top_25))+geom_boxplot()
+p10<-ggplot(data = data_all,aes(x = top_25,y = par5_SA,fill=top_25))+geom_boxplot()
+p11<-ggplot(data = data_all,aes(x = top_25,y = gir,fill=top_25))+geom_boxplot()
+p12<-ggplot(data = data_all,aes(x = top_25,y = hole_proximity,fill=top_25))+geom_boxplot()
+p13<-ggplot(data = data_all,aes(x = top_25,y = putts_round,fill=top_25))+geom_boxplot()
+p14<-ggplot(data = data_all,aes(x = top_25,y = scramble,fill=top_25))+geom_boxplot()
+p15<-ggplot(data = data_all,aes(x = top_25,y = sg_putt,fill=top_25))+geom_boxplot()
+p16<-ggplot(data = data_all,aes(x = top_25,y = sg_t2g,fill=top_25))+geom_boxplot()
+p17<-ggplot(data = data_all,aes(x = top_25,y = sg_total,fill=top_25))+geom_boxplot()
+p18<-ggplot(data = data_all,aes(x = top_25,y = points_gained,fill=top_25))+geom_boxplot()
+
+grid.arrange(p1,p2,p3,p4,p5,p6,nrow=3)
+```
+
+```{r plot2}
+grid.arrange(p7,p8,p9,p10,p11,p12,nrow=3)
+```
+
+```{r plot 3}
+grid.arrange(p13,p14,p15,p16,p17,p18,nrow=3)
+```
+
+### Distributions
+```{r distributions}
+q1<- ggplot(data_all, aes(top_25, fill=top_25)) +
+  geom_bar()
+q2<- ggplot(data_all, aes(wgr, fill=..count..)) +
+  geom_histogram()
+q3 <- ggplot(data_all, aes(ranking, fill=..count..)) +
+  geom_histogram()
+
+grid.arrange(q1,q2,q3,nrow=3)
+```
+
+### Bivariate Relationships
+```{r bivar}
+ggplot(data_all, aes(x = new_score, y = putts_round, color=top_25)) +
+  geom_point(alpha = .5)
+```
+
+Classification Models
+=======================================================================
+
+Row 
+-----------------------------------------------------------------------
+
+```{r classification models, include=FALSE}
+## QDA
+set.seed(1234)
+qda_fits_1 <- qda(top_25 ~ wgr+sg_t2g+points_gained,
+                   data = training)
+qda_preds_1 <- predict(qda_fits_1, testing)
+new_fits_qda <- mutate(testing, 
+                   pprobs = qda_preds_1$posterior[, 2],
+                   top_25 = if_else(top_25 == "1", 1, 0))
+
+## Logistic Regression
+set.seed(1234)
+glm_fits_1 <- glm(top_25 ~ .-year-new_score-total_score-masters_finish-m_cut-sg_total-scramble-putts_round-rounds-par5_SA-bounce_back-top_10-score_average-ranking-driving_accuracy-driving_distance-sg_putt-gir-hole_proximity-wins-m_play, 
+                   family = "binomial",
+                   data = training)
+glm_preds_1 <- predict(glm_fits_1, testing, type= "response")
+
+##LDA
+set.seed(1234)
+lda_fits_1 <- lda(top_25 ~ .-year-new_score-total_score-masters_finish-m_cut-sg_total-scramble-putts_round-rounds-par5_SA-bounce_back-top_10-score_average-ranking-driving_accuracy-driving_distance-sg_putt-gir-hole_proximity-wins-m_play,
+                   data = training)
+lda_preds_1 <- predict(lda_fits_1, testing)
+
+## Polynomial Regression
+glm_poly <- glm(top_25 ~ poly(wgr, 2)+ poly(sg_t2g, 2) + poly(points_gained, 2), data = training, family = "binomial")
+poly_preds<- predict(glm_poly, testing, type="response")
+
+## Random Forest
+set.seed(1234)
+c_rf_pga_1 <- randomForest(top_25 ~ . -year-masters_finish-m_cut-total_score-new_score-bounce_back-sg_putt, 
+                          data = training,
+                          mtry = 1,
+                          ntree=500)
+c_rf1_test_preds <- predict(c_rf_pga_1, newdata = testing,type="prob")
+
+## Gradient Boosting Model
+set.seed(1234)
+grid <- expand.grid(interaction.depth = c(1, 3), 
+                    n.trees = seq(0, 2000, by = 100),
+                    shrinkage = c(.01, 0.001),
+                    n.minobsinnode = 10) 
+trainControl <- trainControl(method = "cv", number = 10)
+gbm_pga <- caret::train(top_25 ~ . -year-masters_finish-m_cut-total_score-new_score-bounce_back-sg_putt, 
+                    data = training,
+                    method="gbm",
+                    trControl = trainControl,
+                    tuneGrid=grid)
+gbm_preds <- predict(gbm_pga, newdata = testing, n.trees=200, type="prob")
+
+## Neural Net
+set.seed(1234)
+c_nn_new <- nnet(top_25 ~ . -year-masters_finish-m_cut-total_score-new_score-bounce_back-sg_putt,
+                  data = training,
+                  size = 3,
+                  decay = 1,
+                  maxit = 1000)
+tmp2 <- predict(c_nn_new, newdata = testing) 
+```
+
+### Comparison of AUC across models
+```{r AUC}
+roc_plot<-roc.plot(x=testing$top_25=="1",pred=cbind(glm_preds_1,lda_preds_1$posterior[,2],
+                                      qda_preds_1$posterior[,2],poly_preds,c_rf1_test_preds[,2],gbm_preds[,2],tmp2),legend = T,
+         leg.text = c("Logistic","Linear Discriminant","Quadradic Discriminant",
+                      "Polynomial","Random Forest","GBM","Neural Net"))$roc.vol
+```
+
+### AUC Comparison
+```{r roc}
+roc_plots<- roc_plot[,1:2] %>% arrange(desc(Area)) %>% mutate(model=c("Linear Discriminant","Logistic","Quadradic Discriminant","Neural Net","Polynomial","GBM","Random Forest"))
+
+DT::datatable(roc_plots[,c(2,3)], options = list(
+  pageLength=25, dom="t"
+))
+```
+
+Regression Models
+=======================================================================
+
+Row 
+-----------------------------------------------------------------------
+
+```{r regression models, include=FALSE}
+## Data and Training and Testing Sets
+df2 <- df2[,-c(1,2,4,5,24,23)]
+set.seed(1234)
+inTraining <- createDataPartition(df2$score_average, p = .75, list = F)
+training <- df2[inTraining,]
+testing <- df2[-inTraining,]
+
+## Linear Regression
+set.seed(1234)
+linear <- lm(new_score ~ wgr+score_average+driving_accuracy+points_gained+m_play, data=training)
+lm<-mean((testing$new_score - predict(linear, newdata = testing))^2)
+
+## Random Forest
+lambdas <- 10^seq(-2, 5, len = 100)
+set.seed(1234)
+rf_pga_1 <- randomForest(new_score ~ ., 
+                            data = training,
+                            mtry = 1,
+                         ntree=500)
+rf_preds <- predict(rf_pga_1, newdata = testing)
+rf_test_df <- testing %>% 
+  mutate(y_hat_rf_1 = rf_preds,
+         sq_err_rf_1 = (y_hat_rf_1 - new_score)^2)
+random_forest <- mean(rf_test_df$sq_err_rf_1)
+
+## Neural Net
+set.seed(1234)
+nn_boston_cv <- nnet(new_score ~ .,
+                     data = training,
+                     size = 1,
+                     decay = 0.1,
+                     linout = TRUE,
+                     maxit = 1000,
+                     trace = FALSE)
+test_preds_cv <- predict(nn_boston_cv, newdata = testing)
+nn_train_cv_df <- testing %>%
+  mutate(y_hat_cv = test_preds_cv,
+         sq_err_cv = (y_hat_cv - new_score)^2)
+neural_net <- mean(nn_train_cv_df$sq_err_cv)
+
+## Gradient Boosting Model
+set.seed(1234)
+gbm_pga <- gbm(new_score ~ ., 
+                    data = training, 
+                    distribution = "gaussian",
+                    n.tree=300,
+                    interaction.depth=1,
+                    shrinkage=0.01)
+gb_preds <- predict(gbm_pga, newdata = testing, n.trees = 300)
+gb_test_df <- testing %>%
+  mutate(y_hat_gbm = gb_preds,
+         sq_err_gbm = (y_hat_gbm - new_score)^2)
+gradient_boosting <- mean(gb_test_df$sq_err_gbm)
+
+## Bagged 
+set.seed(1234)
+bag_pga <- randomForest(new_score ~ ., data = training, mtry = 19)
+test_preds <- predict(bag_pga, newdata = testing)
+pga_test_df <- testing %>%
+  mutate(y_hat_bags = test_preds,
+         sq_err_bags = (y_hat_bags - new_score)^2)
+bagged <- mean(pga_test_df$sq_err_bags)
+
+## Ridge Regression
+set.seed(1234)
+x <- scale(model.matrix(new_score ~ ., df2)[, -1])
+y <- df2$new_score
+x_train <- x[inTraining, ]
+x_test  <- x[-inTraining, ]
+y_train <- y[inTraining]
+y_test <- y[-inTraining]
+set.seed(1234)
+ridge_mod <- glmnet(x_train, y_train, alpha = 0, lambda = 4)
+cv_out <- cv.glmnet(x_train, y_train, alpha = 0, lambda = lambdas) 
+bestlam <- cv_out$lambda.min
+ridge <- mean((predict(ridge_mod, s = cv_out$lambda.min, newx = x_test) - y_test)^2)
+```
+
+### Compare Performance of All Models
+```{r regression comparison}
+all_mse <- tibble(lm,ridge, bagged, random_forest, gradient_boosting, neural_net)
+model_comparison <- all_mse %>% gather(model, MSE) %>% arrange(MSE)
+
+DT::datatable(model_comparison[,c(1,2)], options = list(
+  pageLength=25, dom="t"
+))
+```
+
+```{r rf train, include=FALSE}
+## Train Random Forest Model to identify important predictors
+set.seed(1982)
+rf_pga_cv <- caret::train(new_score ~ ., 
+                      data = training,
+                      method = "rf",
+                      ntree = 100,
+                      importance = T,
+                      tuneGrid = data.frame(mtry = 1:13))
+```
+
+```{r importance, include=FALSE}
+imp_rf <- varImp(rf_pga_cv)$importance ## most important variable is given 100 then goes in decsending order
+rn_rf <- row.names(imp_rf)
+imp_rf <- data_frame(variable = rn_rf, 
+                     importance = imp_rf$Overall) %>%
+  arrange(desc(-importance)) %>%
+  mutate(variable = factor(variable, variable))
+```
+
+### Important Predictors for Random Forest
+```{r importance chart}
+r <- ggplot(data = imp_rf,
+            aes(variable, importance))
+r + geom_col(fill = "#6e0000") +
+  coord_flip()
+```
+
+Predictions for 2019 Masters
+=======================================================================
+
+Row 
+-----------------------------------------------------------------------
+
+```{r class predict data, include=FALSE}
+data <- read.csv("pga_tour_data1.csv", stringsAsFactors = FALSE)
+data$year<- as.numeric(data$year)
+new_data <- data %>% filter(year>2016)
+new_data <- new_data %>% arrange(player_name)
+new_data<- new_data %>% group_by(player_name) %>% mutate(mast_last=lag(masters_finish))
+new_data <- mutate(new_data, m_play= if_else(as.numeric(mast_last)=="NA",as.numeric(0),1))
+new_data$m_play[is.na(new_data$m_play)] <- 0
+new_data$m_play <- as.factor(new_data$m_play)
+new_data <- new_data[,-c(1)]
+new_data <- new_data[!is.na(new_data$score_average),]
+new_data$wgr <- as.numeric(new_data$wgr)
+new_data$rounds <- as.numeric(new_data$rounds)
+new_data$wins <- as.numeric(new_data$wins)
+new_data$top_10 <- as.numeric(new_data$top_10)
+new_data$ranking <- as.numeric(new_data$ranking)
+df_2018 <- new_data %>% filter(year==2018)
+df_2018 <- df_2018[,-3]
+wgr_2018 <- read.csv("wgr_2019.csv")
+wgr_2018<- wgr_2018[,-1]
+df_2018 <- left_join(df_2018, wgr_2018, by=c("player_name", "year"))
+df_2018$wgr[is.na(df_2018$wgr)] <- df_2018$ranking[is.na(df_2018$wgr)]
+df_2018$points_gained[is.na(df_2018$points_gained)] <-0
+df_2018$m_cut <- if_else(df_2018$masters_finish==99,0,1)
+df_2018$m_cut <- as.factor(df_2018$m_cut)
+df_2018$top_25 <- if_else(df_2018$masters_finish<=25,1,0)
+df_2018$top_25 <- as.factor(df_2018$top_25)
+df_2018 <- mutate(df_2018, new_score = if_else(as.numeric(masters_finish) == 99, total_score + 160, as.numeric(total_score)))
+rownames(df_2018)<- df_2018$player_name
+df_2018<- df_2018 %>% dplyr::select(-player_name)
+df_2018<- as.data.frame(df_2018)
+```
+
+### QDA Prediction: Players with Top 25 Finish
+```{r QDA predict}
+## QDA
+qda_2019 <- predict(qda_fits_1, df_2018)
+options(scipen=999)
+predictions <- df_2018 %>% mutate(preds=qda_2019$class,
+                                  probs=qda_2019$posterior[,2])
+final <- predictions %>% arrange(desc(probs))
+final$Top_25 <- ifelse(final$preds=="1", "Yes","No")
+
+DT::datatable(final[,c(1,30,29)], rownames=FALSE,options = list(
+  pageLength=25
+))
+```
+
+```{r regress predict data, include=FALSE}
+## Data for Regression Prediction
+data1 <- read.csv("pga_tour_data1.csv", stringsAsFactors = FALSE)
+wgr_2018 <- read.csv("wgr_2019.csv")
+df_1 <- tbl_df(data1[,-1]) 
+df_1 <- df_1[!is.na(df_1$score_average),]
+df_1 <- df_1 %>% arrange(player_name)
+df_1<- df_1 %>% group_by(player_name) %>% mutate(mast_last=lag(masters_finish))
+
+## Create new variable that is whether a player played in the masters tournament the year before or not
+df_1 <- mutate(df_1, m_play= if_else(as.numeric(mast_last)=="NA",as.numeric(0),1))
+df_1$m_play[is.na(df_1$m_play)] <- 0
+df_1$m_play <- as.factor(df_1$m_play)
+df_1 <- df_1[,-22]
+
+df_new <- df_1 %>% filter(year==2018)
+df_new <- df_new[,-3]
+df_new <- left_join(df_new, wgr_2018, by=c("player_name", "year"))
+df_new$wgr[is.na(df_new$wgr)] <- df_new$ranking[is.na(df_new$wgr)]
+df_new$points_gained[is.na(df_new$points_gained)] <-0
+```
+
+### Random Forest Prediction: Finishing Position
+```{r RF}
+set.seed(1234)
+rf_2019 <- predict(rf_pga_1, newdata = df_new)
+df_new$rf_preds <- paste(rf_2019)
+rf_results <- df_new %>% arrange(rf_preds) %>% dplyr::select(player_name)
+rf_results$Place <- 1:193
+rf_results <- rf_results[,c(2,1)]
+
+DT::datatable(rf_results[,c(1,2)], rownames=FALSE,options = list(
+  pageLength=25
+))
+```
+
+### Linear Regression Prediction: Finishing Position
+```{r LM}
+set.seed(1234)
+linear_2019<- predict(linear, newdata=df_new)
+df_new$lm_preds<- paste(linear_2019)
+linear_results <- df_new %>% arrange(lm_preds) %>% dplyr::select(player_name)
+linear_results$Place <- 1:193
+linear_results <- linear_results[,c(2,1)]
+
+DT::datatable(linear_results[,c(1,2)], rownames=FALSE,options = list(
+  pageLength=25
+))
+```
+
+
+

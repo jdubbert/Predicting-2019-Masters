@@ -1,0 +1,537 @@
+---
+title: "PGA Modeling"
+author: "Jacob Dubbert"
+date: "3/4/2019"
+output: 
+  html_document:
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libs, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(broom)
+library(glmnet)
+library(caret)
+library(ISLR)
+library(janitor)
+library(stringr)
+library(rpart)
+library(rpart.plot)
+library(partykit)
+library(tree)
+library(nnet)
+library(dplyr)
+library(car)
+library(randomForest)
+library(gbm)
+library(xtable)
+library(GGally)
+library(mgcv)
+library(visreg)
+library(splines)
+library(nnet)
+```
+
+This markdown file models the PGA data to determine the best model to predict the Masters tournament results for 2019. In this anlalysis I will go through multiple regression models to predict the `total_score` for the Masters Tournament for each player, with the end goal being to find the best model to predict the 2019 Masters Tournament results.  
+
+For each model, the optimal set of parameters are selected through brute force: all possible combinations of parameters are looped through, and for each set of parameters the model's performance is evaluated using cross validation. This is done to avoid overfitting: that is, choosing a model that fits the estimating data very well but does not generalize well to new data. 
+
+I divided the PGA data into a "training" set and a "testing" set. The training set is used to estimate the parameters of the model, and then the testing set is used to evaluate the predictions of the model. The models are evaluated using mean-squared prediction error, which in this context is defined as the difference between our predicted `total_score` and the observed `total_score, squared and then averaged. Cross validation involves repeating this process several times (i.e. dividing your sample into training and testing sets) and averaging the model's performance on the testing sets. This repetitive process is again done to avoid overfitting. The model that performs the best in the cross validation exercise should be the one that generalizes the best to new data. 
+
+## Load Data and cleaning
+```{r}
+data <- read.csv("pga_tour_data1.csv", stringsAsFactors = FALSE)
+df <- tbl_df(data[,-1]) 
+df <- df[!is.na(df$masters_finish),]
+df <- df[!is.na(df$score_average),]
+
+## Add points variable
+points <- read.csv("wgr_golf_rank1.csv", stringsAsFactors = F)
+points <- points[,-c(1,2)]
+points$points_gained[points$points_gained=="+"] <-0
+points$points_gained<- as.numeric(points$points_gained)
+df <- left_join(df, points, by=c("player_name", "year"))
+df$points_gained[is.na(df$points_gained)] <-0
+
+## Change factors to numeric
+df$wgr <- as.numeric(df$wgr)
+df$rounds <- as.numeric(df$rounds)
+df$wins <- as.numeric(df$wins)
+df$top_10 <- as.numeric(df$top_10)
+df$ranking <- as.numeric(df$ranking)
+df$masters_finish <- as.numeric(df$masters_finish)
+
+## If wgr is missing, have it equal to the ranking for that year.
+df$wgr[is.na(df$wgr)] <- df$ranking[is.na(df$wgr)]
+```
+
+## Create Features
+To add to the analysis, I decided to do some feature engineering by creating new variables. 
+
+1. `m_cut` is a dependent variable that is a 0 if a player missed the cut and a 1 if a player made the cut; this will be used in the classification models. 
+2. `top_25` is a dependent variable that is coded 1 if the player placed in the top 25 and 0 if they didnt; this will be used in the classifcation models. 
+3. `new-score` is a dependent variable that adds 160 to a player's final score if the player didnt make the cut - this is to allow for a similar number to players that did make the cut for regression modeling. This solves the problem of a player that missed the cut only having total strokes for two days, as opposed to 4 days like the players that made the cut. 
+4. `p_masters` is an independent variable which is the Masters finishing position for that player in the previous year. 
+```{r}
+## Create made cut (`m_cut`) variable (binary: 0=missed cut; 1=made cut)
+df$m_cut <- if_else(df$masters_finish==99,0,1)
+df$m_cut <- as.factor(df$m_cut)
+
+## Create placed in top 25 (`top_25`) in masters variable (0=no; 1=yes)
+df$top_25 <- if_else(df$masters_finish<=25,1,0)
+df$top_25 <- as.factor(df$top_25)
+
+## Create new_score variable that adds 160 to each player that didnt make the cut
+df <- mutate(df, new_score = if_else(as.numeric(masters_finish) == 99, total_score + 160, as.numeric(total_score)))
+
+## Create new variable that is the Masters finishing position of last year for each player
+df <- df %>% arrange(player_name)
+df<- df %>% group_by(player_name) %>% mutate(mast_last=lag(masters_finish))
+
+## Create new variable that is whether a player played in the masters tournament the year before or not
+df <- mutate(df, m_play= if_else(as.numeric(mast_last)=="NA",as.numeric(0),1))
+df$m_play[is.na(df$m_play)] <- 0
+df$m_play <- as.factor(df$m_play)
+df <- df[,-26] ## get rid of mast_last variable for now
+
+write.csv(df, "all_data.csv")
+```
+
+## Create Training and Testing data sets
+```{r}
+set.seed(1234)
+df2 <- df[,-1]
+write.csv(df2, "df2.csv")
+
+df3 <- df2
+df3 <- df3[,-c(1,3,4,23,22)]
+
+inTraining <- createDataPartition(df3$score_average, p = .75, list = F)
+training <- df3[inTraining,]
+testing <- df3[-inTraining,]
+
+
+x <- scale(model.matrix(new_score ~ ., df3)[, -c(1,2,4,5,24,23)])
+y <- df3$new_score
+
+x_train <- x[inTraining, ]
+x_test  <- x[-inTraining, ]
+
+y_train <- y[inTraining]
+y_test <- y[-inTraining]
+```
+
+## OLS Regression
+Here I am running a simle OLS regression with `new_score` as the dependent variable. A multiple linear regression model
+was created to predict the `total_score` using the predictor variables selected as a result of stepwise selection. Stepwise selection was applied to identify the best subset of variables that represent the optimum set of predictors of the  `total_score`.
+
+Initial Model
+```{r}
+set.seed(1234)
+linear <- lm(new_score ~ .-bounce_back-scramble-driving_distance-putts_round-par5_SA-rounds-gir-top_10-wins-sg_putt-ranking-sg_total-sg_t2g-hole_proximity, data=training)
+summary(linear)
+```
+
+Evaluation
+```{r}
+## MSE
+lm<-mean((testing$new_score - predict(linear, newdata = testing))^2)
+lm
+```
+
+Model with best subset of variables using leave one out cross validation
+```{r}
+# train the model
+set.seed(1234)
+loocv_lm <- caret::train(new_score ~ ., 
+                 data = training, 
+                 trControl = trainControl(method="LOOCV"), 
+                 method = "lm")
+print(loocv_lm) ## RMSE gives you the root (square it to get the MSE)
+loocv_lm$results$RMSE^2
+```
+
+Model with k-fold cross-validation. Training based on folds or groups of observations - used 10 fold every time
+```{r}
+set.seed(1234)
+k_10_cv_lm <- train(new_score ~ .-masters_finish-m_cut-total_score-year-top_25, 
+                   data = training, 
+                   trControl = trainControl(method = "cv", number = 10),
+                   method = "lm")
+k_10_cv_lm
+k_10_cv_lm$results$RMSE^2
+```
+
+Confidence interval of coefficients
+```{r}
+confint(linear, level = 0.99)
+```
+
+Model Diagnostics
+```{r}
+plot(linear)
+```
+
+## Ridge Regression
+```{r}
+lambdas <- 10^seq(-2, 5, len = 100) 
+ridge_mod <- glmnet(x_train, y_train, alpha = 0, lambda = 4)
+ridge_pred <- predict(ridge_mod, s = 1, newx = x_test) # predict on test
+mean((ridge_pred - y_test)^2)
+```
+
+Choose best value of lambda using cross-validation
+```{r}
+set.seed(1234)
+cv_out <- cv.glmnet(x_train, y_train, alpha = 0, lambda = lambdas) 
+bestlam <- cv_out$lambda.min
+bestlam # best value of lamda
+plot(cv_out)
+```
+
+Evaluation
+```{r}
+ridge <- mean((predict(ridge_mod, s = cv_out$lambda.min, newx = x_test) - y_test)^2)
+ridge
+```
+
+## Lasso Regression
+```{r}
+set.seed(1234)
+x <- model.matrix(new_score ~ ., data = df3)[, -c(1,2,4,5,24,23)]
+y <- df3$new_score
+inTraining <- createDataPartition(df3$new_score, 
+                                  p = .75,
+                                  list = F)
+x_train <- x[inTraining, ]
+x_test  <- x[-inTraining, ]
+
+y_train <- y[inTraining]
+y_test <- y[-inTraining]
+```
+
+```{r}
+lasso <- glmnet(x, y, alpha = 1, lambda = lambdas)
+plot(lasso, xvar = "lambda")
+```
+
+```{r}
+lasso_mod <- glmnet(x_train, y_train, alpha = 1, lambda = lambdas)
+plot(lasso_mod, xvar = "lambda")
+coef(lasso_mod, s = 2)
+
+## MSE
+lasso_pred <- predict(lasso_mod, s = 2, newx = x_test)
+mean((lasso_pred - y_test)^2)
+```
+
+Train model to find optimal value of lambda using cross-validation. This will be a 10-fold cross validation.
+```{r}
+set.seed(1234)
+lasso_cv <- cv.glmnet(x_train, y_train, alpha = 1, lambda = lambdas) 
+plot(lasso_cv)
+lasso_cv$lambda.1se # this is the value of lamda that you want to use
+bestlam <- lasso_cv$lambda.1se
+bestlam
+```
+
+Fit the model to the entire data set using the best value of $\lambda$.
+```{r}
+lasso <-mean((predict(lasso_cv, newx = x_test, s = bestlam) - y_test)^2)
+lasso
+
+lasso_full <- glmnet(x, y, alpha = 1)
+coef(lasso_full, s = bestlam)
+
+lasso_mod2 <- glmnet(x_train, y_train, alpha = 1, lambda = bestlam)
+fits_lasso <- mutate(df2, fits = predict(lasso_mod2, alpha=1,newx = x))
+```
+
+Evaluation
+```{r}
+lasso_mse <- mean((fits_lasso$fits - fits_lasso$new_score)^2)
+lasso_mse
+```
+
+## Polynomial Regression
+```{r}
+
+```
+
+## Generalized Additive Model (GAM)
+```{r}
+
+```
+
+## Bagged Model
+```{r}
+set.seed(1234)
+bag_pga <- randomForest(new_score ~ ., data = training, mtry = 19)
+bag_pga
+```
+
+Compute Test MSE
+```{r}
+test_preds <- predict(bag_pga, newdata = testing)
+pga_test_df <- testing %>%
+  mutate(y_hat_bags = test_preds,
+         sq_err_bags = (y_hat_bags - new_score)^2)
+bagged <- mean(pga_test_df$sq_err_bags)
+bagged
+```
+
+Train with # of trees
+```{r}
+set.seed(1234)
+bag_pga <- randomForest(new_score ~ .,
+                           data = training,
+                           mtry = 18,
+                           ntree = 500)
+bag_pga
+```
+MSE
+```{r}
+test_preds <- predict(bag_pga, newdata = testing)
+pga_test_df <- testing %>%
+  mutate(y_hat_bags = test_preds,
+         sq_err_bags = (y_hat_bags - new_score)^2)
+mean(pga_test_df$sq_err_bags)
+```
+
+## Random Forest
+```{r}
+set.seed(1234)
+rf_pga <- randomForest(new_score ~ ., 
+                          data = training,
+                          mtry = 6)
+rf_pga
+```
+
+Test MSE
+```{r}
+test_preds <- predict(rf_pga, newdata = testing)
+pga_test_df <- testing %>%
+  mutate(y_hat_rf = test_preds,
+         sq_err_rf = (y_hat_rf - new_score)^2)
+mean(pga_test_df$sq_err_rf)
+```
+
+Determine optimal number of trees and predictors
+```{r}
+set.seed(1234)
+
+rf_pga_cv <- caret::train(new_score ~ ., 
+                      data = training,
+                      method = "rf",
+                      ntree = 100,
+                      importance = T,
+                      tuneGrid = data.frame(mtry = 1:13))
+rf_pga_cv
+plot(rf_pga_cv)
+```
+Important Predictors
+```{r}
+imp_rf <- varImp(rf_pga_cv)$importance ## most important variable is given 100 then goes in decsending order
+rn_rf <- row.names(imp_rf)
+imp_rf <- data_frame(variable = rn_rf, 
+                     importance = imp_rf$Overall) %>%
+  arrange(desc(-importance)) %>%
+  mutate(variable = factor(variable, variable))
+r <- ggplot(data = imp_rf,
+            aes(variable, importance))
+r + geom_col(fill = "#6e0000") +
+  coord_flip()
+```
+
+Refit with best mtry
+```{r}
+set.seed(1234)
+rf_pga_1 <- randomForest(new_score ~ ., 
+                            data = training,
+                            mtry = 1,
+                         ntree=500)
+rf_pga_1
+```
+Test MSE
+```{r}
+rf_preds <- predict(rf_pga_1, newdata = testing)
+rf_test_df <- testing %>% 
+  mutate(y_hat_rf_1 = rf_preds,
+         sq_err_rf_1 = (y_hat_rf_1 - new_score)^2)
+random_forest <- mean(rf_test_df$sq_err_rf_1)
+random_forest
+```
+
+## Boosting Model
+```{r}
+set.seed(1234)
+grid <- expand.grid(interaction.depth = c(1, 3), # number of splits you have in your tree; will give youl 1 and 3 splits
+                    n.trees = seq(0, 2000, by = 100),
+                    shrinkage = c(.01, 0.001),
+                    n.minobsinnode = 10) # need at least 10 in particular leaf/split
+trainControl <- trainControl(method = "cv", number = 5)
+gbm_pga <- caret::train(new_score ~ ., 
+                    data = training, 
+                    distribution = "gaussian", 
+                    method = "gbm",
+                    trControl = trainControl, 
+                    tuneGrid = grid,
+                    verbose = FALSE)
+gbm_pga
+```
+Test MSE
+```{r}
+gb_preds <- predict(gbm_pga, newdata = testing)
+gb_test_df <- testing %>%
+  mutate(y_hat_gbm = gb_preds,
+         sq_err_gbm = (y_hat_gbm - new_score)^2)
+mean(gb_test_df$sq_err_gbm)
+```
+
+Refit using optimal values
+```{r}
+set.seed(1234)
+gbm_pga <- gbm(new_score ~ ., 
+                    data = training, 
+                    distribution = "gaussian",
+                    n.tree=300,
+                    interaction.depth=1,
+                    shrinkage=0.01)
+gbm_pga
+```
+
+Test MSE
+```{r}
+gb_preds <- predict(gbm_pga, newdata = testing, n.trees = 300)
+gb_test_df <- testing %>%
+  mutate(y_hat_gbm = gb_preds,
+         sq_err_gbm = (y_hat_gbm - new_score)^2)
+gradient_boosting <- mean(gb_test_df$sq_err_gbm)
+gradient_boosting
+```
+
+## Support Vector Machine
+```{r}
+
+```
+
+## Neural Net
+```{r}
+set.seed(1234)
+nn_pga <- nnet(new_score ~ .,
+                  data = training,
+                  size = 3, 
+                  decay = 0.01, 
+                  linout = TRUE,
+                  maxit = 1000,
+                  trace = FALSE)
+```
+Testing MSE
+```{r}
+test_preds <- predict(nn_pga, newdata = testing)
+nn_test_df <- testing %>%
+  mutate(y_hat_nn = test_preds,
+         sq_err_nn = (y_hat_nn - new_score)^2)
+mean(nn_test_df$sq_err_nn)
+```
+
+Find optimal values
+```{r}
+set.seed(1234)
+tune_grid <- expand.grid(size = 1:6,
+                         decay = c(.01, .05, .1, .2, .5, 1))
+fit_control <- trainControl(method = "repeatedcv",
+                           number = 10, 
+                           repeats = 3)
+nn_pga_train <- caret::train(new_score ~ .,
+                         data = training,
+                         method = "nnet",
+                         tuneGrid = tune_grid,
+                         trControl = fit_control,
+                         maxit = 500,
+                         linout = TRUE,
+                         verbose = FALSE,
+                         trace = FALSE)
+nn_pga_train
+```
+
+Refit neural net
+```{r}
+nn_boston_cv <- nnet(new_score ~ .,
+                     data = training,
+                     size = 1,
+                     decay = 0.2,
+                     linout = TRUE,
+                     maxit = 1000,
+                     trace = FALSE)
+```
+Test MSE
+```{r}
+test_preds_cv <- predict(nn_boston_cv, newdata = testing)
+
+nn_train_cv_df <- testing %>%
+  mutate(y_hat_cv = test_preds_cv,
+         sq_err_cv = (y_hat_cv - new_score)^2)
+neural_net <- mean(nn_train_cv_df$sq_err_cv)
+neural_net
+```
+
+## Compare performance of models
+```{r}
+all_mse <- tibble(lm,ridge, lasso, bagged, random_forest, gradient_boosting, neural_net)
+model_comparison <- all_mse %>% gather(model, MSE) %>% arrange(MSE)
+model_comparison
+```
+
+## Predict 2019 results with 2018 data
+```{r}
+df_new <- df %>% filter(year==2018)
+df_new <- df_new[,-3]
+df_new <- left_join(df_new, wgr_2018, by=c("player_name", "year"))
+df_new$wgr[is.na(df_new$wgr)] <- df_new$ranking[is.na(df_new$wgr)]
+df_new$points_gained[is.na(df_new$points_gained)] <-0
+df_new <- df_new %>% column_to_rownames(var="player_name")
+df_new<- df_new[,-1]
+df_new<- df_new[,-23]
+```
+
+Random Forest
+```{r}
+set.seed(1234)
+rf_2019 <- predict(rf_pga_1, newdata = df_new)
+df_new$rf_preds <- paste(rf_2019)
+rf_results <- df_new %>% arrange(rf_preds) %>% dplyr::select(player_name)
+
+DT::datatable(rf_results[,c(1,2)], rownames=FALSE,options = list(
+  pageLength=25
+))
+```
+
+Linear Regression
+```{r}
+set.seed(1234)
+linear_2019<- predict(linear, newdata=df_new)
+df_new$lm_preds<- paste(linear_2019)
+linear_results <- df_new %>% arrange(lm_preds) %>% dplyr::select(player_name)
+
+DT::datatable(linear_results[,c(1,2)], rownames=FALSE,options = list(
+  pageLength=25
+))
+```
+Gradient Boosting Algorithm
+```{r}
+set.seed(1234)
+gbm_2019 <- predict(gbm_pga, newdata= df_new, n.trees = 300)
+df_new$gbm_preds <- paste(gbm_2019)
+gbm_results <- df_new %>% arrange(gbm_preds) %>% dplyr::select(player_name)
+
+DT::datatable(gbm_results[,c(1,2)], rownames=FALSE,options = list(
+  pageLength=25
+))
+```
+
+
