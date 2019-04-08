@@ -262,6 +262,7 @@ p_all <- as.data.frame(do.call(rbind, lapply(p_list, `length<-`, max(p_indx))))
 p_all <- subset(p_all, select = c("Year", "PLAYER.NAME", "TOTAL.DISTANCE..FEET.")) %>%  clean_names()
 names(p_all)[names(p_all)=="total_distance_feet"] <- "hole_proximity"
 p_all$hole_proximity <- as.numeric(gsub(",", "", p_all$hole_proximity))
+p_all <- p_all[!(p_all$player_name=="Richard Johnson"),]
 ```
 
 ## Get scrambling % `scramble`
@@ -309,6 +310,14 @@ masters_all$masters_finish[masters_all$masters_finish=="CUT"] <- 99
 masters_all$masters_finish[masters_all$masters_finish=="WD"] <- 99
 masters_all$masters_finish <- gsub("T", "", as.character(masters_all$masters_finish))
 masters_all$player_name <- gsub("Playoff:.*", "\\1", as.character(masters_all$player_name))
+masters_all$year <- masters_all$year-1
+```
+
+## Masters finish last year `mast_last`
+```{r}
+masters_all <- masters_all %>% arrange(player_name)
+masters_all <- data.table::data.table(masters_all)
+masters_all<- masters_all %>% group_by(player_name) %>% mutate(mast_last=lag(masters_finish))
 ```
 
 
@@ -329,7 +338,7 @@ all_data <- full_join(ranking_all, top10_all, by =c("player_name", "year")) %>%
   full_join(masters_all, by=c("player_name", "year")) %>% 
   full_join(tstrokes_gained_all, by=c("player_name", "year"))
 
-all_data <- all_data[-c(10844:11620),]
+all_data <- all_data[-c(6748:7593),]
 all_data <- all_data[!(all_data$player_name=="Richard Johnson"),]
 
 all_data <- all_data %>% arrange(player_name, year)
@@ -345,17 +354,50 @@ all_data$top_10[is.na(all_data$top_10)] <- 0
 ```{r}
 wgr_data <- read.csv("wgr_golf_rank.csv")
 wgr_data <- wgr_data[,-1]
+wgr_data$year <- wgr_data$year-1
+
 
 all_data <- full_join(all_data, wgr_data, by=c("player_name", "year"))
-all_data <- all_data[-c(2646:4731),]
-all_data$wgr[is.na(all_data$wgr)] <- all_data$ranking
+all_data <- all_data[-c(2646:4984),]
+all_data$wgr[is.na(all_data$wgr)] <- all_data$ranking[is.na(all_data$wgr)]
 ```
+
+################################
+```{r}
+pga_tour_data <- merge(wgr_data, masters_all, by=c("player_name", "year"), all=TRUE) %>% 
+  merge(ranking_all,by=c("player_name", "year"), all=TRUE) %>% 
+  merge(top10_all,by=c("player_name", "year"), all=TRUE) %>% 
+  merge(score_avg_all,by=c("player_name", "year"), all=TRUE) %>% 
+  merge(bb_all,by=c("player_name", "year"), all=TRUE) %>% 
+  merge(da_all,by=c("player_name", "year"), all=TRUE) %>% 
+  merge(driving_distance_all,by=c("player_name", "year"), all=TRUE) %>% 
+  merge(five_all,by=c("player_name", "year"), all=TRUE) %>% 
+  merge(gir_all,by=c("player_name", "year"), all=TRUE) %>% 
+  merge(p_all,by=c("player_name", "year"), all=TRUE) %>% 
+  merge(putts_all,by=c("player_name", "year"), all=TRUE) %>% 
+  merge(s_all,by=c("player_name", "year"), all=TRUE) %>% 
+  merge(sg_putt_all,by=c("player_name", "year"), all=TRUE) %>% 
+  merge(sg_t2g_all,by=c("player_name", "year"), all=TRUE) %>% 
+  merge(tstrokes_gained_all,by=c("player_name", "year"), all=TRUE)
+
+pga_tour_data <- pga_tour_data[!(pga_tour_data$player_name=="Richard Johnson"),]
+pga_tour_data <- pga_tour_data %>% arrange(year)
+```
+
+Change NAs in wins and top 10 to 0 for binary
+```{r}
+pga_tour_data$wins[is.na(pga_tour_data$wins)] <- 0
+pga_tour_data$top_10[is.na(pga_tour_data$top_10)] <- 0
+```
+#############################################################
+
 
 ## Create csv file
 
 Final file with all variables needed for analysis
 ```{r}
-write.csv(all_data, "pga_data_final.csv")
+write.csv(pga_tour_data, "pga_tour_data1.csv")
+write.csv(all_data, "pga_tour_data2.csv")
 ```
 
 
